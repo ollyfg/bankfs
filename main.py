@@ -1,33 +1,25 @@
 #!/usr/bin/env python3
 
+# This file deals with the filesystem stuff, transalting to to API calls for Akahu.
+
 import os
 import sys
 import errno
 import time
+import zlib
 
 from fuse import FUSE, FuseOSError, Operations
 
-class File():
-    def __init__(self):
-        self.header = {
-            'updated_at': int(time.time())
-        }
-        self.body = b''
-
-files = []
+from file import File
+from akahu import AkahuApi
 
 class BankFS(Operations):
-    def __init__(self, root):
-        self.root = root
-
-    # Helpers
-    # =======
-
-    def _full_path(self, partial):
-        if partial.startswith("/"):
-            partial = partial[1:]
-        path = os.path.join(self.root, partial)
-        return path
+    def __init__(self):
+        # Initialise the Akahu Api client
+        self.akahu = AkahuApi()
+        # Our in-memory cache
+        self.files = self.akahu.read_all()
+        print("Loaded all existing files into cache. You can now use the filesystem!")
 
     # Filesystem methods
     # ==================
@@ -37,7 +29,7 @@ class BankFS(Operations):
             if path == "/":
                 return 0
             fname = path[1:]
-            file = [f for f in files if f.header["name"] == fname][0]
+            file = [f for f in self.files if f.header["name"] == fname][0]
             return 0
         except IndexError as e:
             raise FuseOSError(errno.EACCES)
@@ -64,7 +56,7 @@ class BankFS(Operations):
         # For now, just return placeholder...
         try:
             fname = path[1:]
-            file = [f for f in files if f.header["name"] == fname][0]
+            file = [f for f in self.files if f.header["name"] == fname][0]
             return {
                 "st_atime": file.header["mode"],
                 "st_mtime": file.header["mode"],
@@ -81,7 +73,7 @@ class BankFS(Operations):
 
     def readdir(self, path, fh):
         # Get files from the last 7 days
-        return [".", ".."] + [f.header["name"] for f in files]
+        return [".", ".."] + [f.header["name"] for f in self.files]
 
     def readlink(self, path):
         return 0
@@ -96,7 +88,7 @@ class BankFS(Operations):
         return 0
 
     def statfs(self, path):
-        return {'f_bavail': 5107109, 'f_bfree': 57462189, 'f_blocks': 61202533, 'f_bsize': 1048576, 'f_favail': 2447547563, 'f_ffree': 2447547563, 'f_files': 2448101320, 'f_flag': 1, 'f_frsize': 4096, 'f_namemax': 255}
+        return {'f_bavail': 5107109, 'f_bfree': 57462189, 'f_blocks': 61202533, 'f_bsize': 1048576, 'f_favail': 2447547563, 'f_ffree': 2447547563, 'f_files': 2448101320, 'f_flag': 1, 'f_frsize': 4096, 'f_namemax': 32}
 
     def unlink(self, path):
         return 0
@@ -121,7 +113,7 @@ class BankFS(Operations):
 
     def create(self, path, mode, fi=None):
         fname = path[1:]
-        filenames = [f.header["name"] for f in files]
+        filenames = [f.header["name"] for f in self.files]
         if fname in filenames:
             raise FuseOSError(errno.EEXIST)
         file = File()
@@ -135,32 +127,31 @@ class BankFS(Operations):
         # For now, just return placeholder
         try:
             fname = path[1:]
-            file = [f for f in files if f.header["name"] == fname][0]
+            file = [f for f in self.files if f.header["name"] == fname][0]
             return file.body[offset:length]
         except IndexError as e:
             raise FuseOSError(errno.ENOENT)
 
     def write(self, path, buf, offset, fh):
         # Make some transfers!
+        # Append only, because of the underlying storage
+
         try:
             fname = path[1:]
-            file = [f for f in files if f.header["name"] == fname][0]
-            file.body = file.body[:offset] + buf + file.body[offset + (len(buf)):]
+            file = [f for f in self.files if f.header["name"] == fname][0]
+            compressed = zlib.compress(buf)
+            print("write!", path, buf)
+            # Write to Akahu
+
+            # Write the in-memory file object
+            file.body = buf
             file.header["updated_at"] = int(time.time())
             return len(buf)
         except IndexError as e:
             raise FuseOSError(errno.ENOENT)
 
     def truncate(self, path, length, fh=None):
-        try:
-            fname = path[1:]
-            file = [f for f in files if f.header["name"] == fname][0]
-            file.body = file.body[:length]
-            file.header["updated_at"] = int(time.time())
-            return 0
-        except IndexError as e:
-            raise FuseOSError(errno.ENOENT)
-
+        return 0
     def flush(self, path, fh):
         return 0
 
@@ -171,8 +162,8 @@ class BankFS(Operations):
         return 0
 
 
-def main(mountpoint, root):
-    FUSE(BankFS(root), mountpoint, nothreads=True, foreground=True)
+def main(mountpoint):
+    FUSE(BankFS(), mountpoint, nothreads=True, foreground=True)
 
 if __name__ == '__main__':
-    main(sys.argv[2], sys.argv[1])
+    main(sys.argv[1])
