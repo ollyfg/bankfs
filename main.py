@@ -3,9 +3,18 @@
 import os
 import sys
 import errno
+import time
 
 from fuse import FUSE, FuseOSError, Operations
 
+class File():
+    def __init__(self):
+        self.header = {
+            'updated_at': int(time.time())
+        }
+        self.body = b''
+
+files = []
 
 class BankFS(Operations):
     def __init__(self, root):
@@ -24,106 +33,142 @@ class BankFS(Operations):
     # ==================
 
     def access(self, path, mode):
-        full_path = self._full_path(path)
-        if not os.access(full_path, mode):
+        try:
+            if path == "/":
+                return 0
+            fname = path[1:]
+            file = [f for f in files if f.header["name"] == fname][0]
+            return 0
+        except IndexError as e:
             raise FuseOSError(errno.EACCES)
 
     def chmod(self, path, mode):
-        full_path = self._full_path(path)
-        return os.chmod(full_path, mode)
+        return 0
 
     def chown(self, path, uid, gid):
-        full_path = self._full_path(path)
-        return os.chown(full_path, uid, gid)
+        return 0
 
     def getattr(self, path, fh=None):
-        full_path = self._full_path(path)
-        st = os.lstat(full_path)
-        return dict((key, getattr(st, key)) for key in ('st_atime', 'st_ctime',
-                     'st_gid', 'st_mode', 'st_mtime', 'st_nlink', 'st_size', 'st_uid'))
+        if path == "/":
+            return {
+                "st_atime": int(time.time()),
+                "st_mtime": int(time.time()),
+                "st_ctime": int(time.time()),
+                "st_mode": 16877,
+                "st_nlink": 5,
+                "st_size": 160,
+                "st_gid": 0,
+                "st_uid": 0
+            }
+        # Get the file header
+        # For now, just return placeholder...
+        try:
+            fname = path[1:]
+            file = [f for f in files if f.header["name"] == fname][0]
+            return {
+                "st_atime": file.header["mode"],
+                "st_mtime": file.header["mode"],
+                "st_ctime": file.header["mode"],
+                "st_mode": file.header["mode"],
+                # "st_mode": 33188,
+                "st_nlink": 1,
+                "st_size": len(file.body),
+                "st_gid": 0,
+                "st_uid": 0
+            }
+        except IndexError as e:
+            raise FuseOSError(errno.ENOENT)
 
     def readdir(self, path, fh):
-        print("readdir")
-        full_path = self._full_path(path)
-
-        dirents = ['.', '..']
-        if os.path.isdir(full_path):
-            dirents.extend(os.listdir(full_path))
-        for r in dirents:
-            yield r
+        # Get files from the last 7 days
+        return [".", ".."] + [f.header["name"] for f in files]
 
     def readlink(self, path):
-        pathname = os.readlink(self._full_path(path))
-        if pathname.startswith("/"):
-            # Path name is absolute, sanitize it.
-            return os.path.relpath(pathname, self.root)
-        else:
-            return pathname
+        return 0
 
     def mknod(self, path, mode, dev):
-        return os.mknod(self._full_path(path), mode, dev)
+        return 0
 
     def rmdir(self, path):
-        full_path = self._full_path(path)
-        return os.rmdir(full_path)
+        return 0
 
     def mkdir(self, path, mode):
-        return os.mkdir(self._full_path(path), mode)
+        return 0
 
     def statfs(self, path):
-        full_path = self._full_path(path)
-        stv = os.statvfs(full_path)
-        return dict((key, getattr(stv, key)) for key in ('f_bavail', 'f_bfree',
-            'f_blocks', 'f_bsize', 'f_favail', 'f_ffree', 'f_files', 'f_flag',
-            'f_frsize', 'f_namemax'))
+        return {'f_bavail': 5107109, 'f_bfree': 57462189, 'f_blocks': 61202533, 'f_bsize': 1048576, 'f_favail': 2447547563, 'f_ffree': 2447547563, 'f_files': 2448101320, 'f_flag': 1, 'f_frsize': 4096, 'f_namemax': 255}
 
     def unlink(self, path):
-        return os.unlink(self._full_path(path))
+        return 0
 
     def symlink(self, name, target):
-        return os.symlink(target, self._full_path(name))
+        return 0
 
     def rename(self, old, new):
-        return os.rename(self._full_path(old), self._full_path(new))
+        return 0
 
     def link(self, target, name):
-        return os.link(self._full_path(name), self._full_path(target))
+        return 0
 
     def utimens(self, path, times=None):
-        return os.utime(self._full_path(path), times)
+        return 0
 
     # File methods
     # ============
 
     def open(self, path, flags):
-        full_path = self._full_path(path)
-        return os.open(full_path, flags)
+        return 0
 
     def create(self, path, mode, fi=None):
-        full_path = self._full_path(path)
-        return os.open(full_path, os.O_WRONLY | os.O_CREAT, mode)
+        fname = path[1:]
+        filenames = [f.header["name"] for f in files]
+        if fname in filenames:
+            raise FuseOSError(errno.EEXIST)
+        file = File()
+        file.header["name"] = fname
+        file.header["mode"] = mode
+        files.append(file)
+        return 0
 
     def read(self, path, length, offset, fh):
-        os.lseek(fh, offset, os.SEEK_SET)
-        return os.read(fh, length)
+        # Find and read the file
+        # For now, just return placeholder
+        try:
+            fname = path[1:]
+            file = [f for f in files if f.header["name"] == fname][0]
+            return file.body[offset:length]
+        except IndexError as e:
+            raise FuseOSError(errno.ENOENT)
 
     def write(self, path, buf, offset, fh):
-        os.lseek(fh, offset, os.SEEK_SET)
-        return os.write(fh, buf)
+        # Make some transfers!
+        try:
+            fname = path[1:]
+            file = [f for f in files if f.header["name"] == fname][0]
+            file.body = file.body[:offset] + buf + file.body[offset + (len(buf)):]
+            file.header["updated_at"] = int(time.time())
+            return len(buf)
+        except IndexError as e:
+            raise FuseOSError(errno.ENOENT)
 
     def truncate(self, path, length, fh=None):
-        full_path = self._full_path(path)
-        with open(full_path, 'r+') as f:
-            f.truncate(length)
+        try:
+            fname = path[1:]
+            file = [f for f in files if f.header["name"] == fname][0]
+            file.body = file.body[:length]
+            file.header["updated_at"] = int(time.time())
+            return 0
+        except IndexError as e:
+            raise FuseOSError(errno.ENOENT)
 
     def flush(self, path, fh):
-        return os.fsync(fh)
+        return 0
 
     def release(self, path, fh):
-        return os.close(fh)
+        return 0
 
     def fsync(self, path, fdatasync, fh):
-        return self.flush(path, fh)
+        return 0
 
 
 def main(mountpoint, root):
